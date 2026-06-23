@@ -1,0 +1,76 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    environment:
+      API_KEY: dev-api-key
+      DATABASE_URL: postgresql+asyncpg://payments:payments@postgres:5432/payments
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/public/v1/health').read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  consumer:
+    build: .
+    environment:
+      API_KEY: dev-api-key
+      DATABASE_URL: postgresql+asyncpg://payments:payments@postgres:5432/payments
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    command: payments-consumer
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
